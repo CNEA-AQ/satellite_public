@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import numba
+import glob
 import xarray as xr
 import numpy as np
 from itertools import product #Cartesian product iterable
@@ -11,7 +12,7 @@ def calculate_interpolation(
     tropo_press: np.ndarray,
     mod_press: np.ndarray,
     averaging_kernel:np.ndarray,
-    lenlatlon: list[tuple[int, int]],
+    lenlatlon: np.ndarray,
     ) -> np.ndarray:
     """
     Calculate the interpolation. Logically, it should be part of interpolate_AK,
@@ -47,7 +48,7 @@ def interpolate_AK(ds_tropomi: xr.Dataset, ds_model: xr.Dataset) -> xr.DataArray
     interp_av: xr.DataArray = xr.zeros_like(ds_model["NO2_partialcolumn"]).rename(
         "tropo_avk"
     )
-    lenlatlon = list(product(range(len(lat)), range(len(lon))))
+    lenlatlon = np.array(list(product(range(len(lat)), range(len(lon)))))
 
     interp_av[:, :, :, 0] = calculate_interpolation(
         interp_template=interp_av[:,:,:,0].values,
@@ -57,19 +58,7 @@ def interpolate_AK(ds_tropomi: xr.Dataset, ds_model: xr.Dataset) -> xr.DataArray
         lenlatlon=lenlatlon
     )
 
-    # for llat, llon in product(range(len(lat)), range(len(lon))):
-    #     tropo_press_mid: xr.DataArray = (
-    #         (tropo_press[llat, llon, 1:] + tropo_press[llat, llon, :-1]) /2
-    #     )
-    #     interp_av[:, llat, llon, 0] = np.flip(
-    #         np.interp(
-    #         np.flip(mod_press[:,llat,llon]),
-    #         np.flip(tropo_press_mid),
-    #         np.flip(averaging_kernel[llat, llon, :])
-    #         )
-    #     )
-
-    interp_av.to_netcdf("interp_av.nc")
+#    interp_av.to_netcdf("interp_av.nc")
     return interp_av
 
 
@@ -114,39 +103,28 @@ def merge_and_diff(no2_model: xr.DataArray, no2_tropomi: xr.DataArray) -> xr.Dat
 
 
 def main() -> None:
-    ds_tropomi: xr.Dataset = xr.open_dataset(
-        "KTW_S5P_NO2_06531_20190116_1710.nc4"
-    )#.isel(time=0)
-    ds_model: xr.Dataset = xr.open_dataset(
-        "2MUSICAv0-SAM27_20190116_NO2_tropomi.nc"
-    )#.isel(time=0)
+    days: list[str] = [f"{day:02d}" for day in range(1,32)]
+    for day in days:
+        ds_model: xr.Dataset = xr.open_dataset(
+            f"2MUSICAv0-SAM27_201901{day}_NO2_tropomi.nc"
+        )#.isel(time=0)
 
-    avgk: xr.DataArray = interpolate_AK(ds_tropomi, ds_model)
-    avgk = avgk.where(avgk < 1e30).isel(time=0)
-    partial_col: xr.DataArray = ds_model["NO2_partialcolumn"].isel(time=0)
-    model_no2_col: xr.DataArray = apply_avgk_no2(partial_col, avgk)
-    # ds_out: xr.Dataset = model_no2_col.to_dataset(name="model_no2")
-    # ds_out["tropomi_no2"] = xr.DataArray(
-    #     data=ds_tropomi["nitrogendioxide_tropospheric_column"].isel(time=0).values,
-    #     dims = ["latitude", "longitude"],
-    #     coords=dict(
-    #         latitude=("latitude", ds_out["latitude"].values),
-    #         longitude=("longitude", ds_out["longitude"].values)
-    #     ),
-    #     attrs=dict(
-    #         description="NO2 retrieved by TROPOMI",
-    #         units="umol/m2",
-    #     )
-    # )
-    # ds_out["tropomi_no2"] = ds_out["tropomi_no2"].where(
-    #     ds_out["tropomi_no2"] < 1e30
-    # )
-    # ds_out["difference"] = ds_out["model_no2"] - ds_out["tropomi_no2"]
-    tropomi_no2_col = ds_tropomi["nitrogendioxide_tropospheric_column"].isel(time=0)
-    ds_out: xr.Dataset = merge_and_diff(no2_model=model_no2_col,
-                                        no2_tropomi=tropomi_no2_col)
-    ds_out["perc_dif"] = ds_out["difference"] / ds_out["model_no2"] * 100
-    ds_out.to_netcdf("comparison_20190116_06531.nc")
+        for ds_trop in sorted(
+            glob.glob(f"../KTW_S5P_NO2_*_201901{day}_*.nc4")
+        ):
+            ds_tropomi: xr.Dataset = xr.open_dataset(
+                ds_trop
+            )#.isel(time=0)
+            avgk: xr.DataArray = interpolate_AK(ds_tropomi, ds_model)
+            avgk = avgk.where(avgk < 1e30).isel(time=0)
+            partial_col: xr.DataArray = ds_model["NO2_partialcolumn"].isel(
+                time=0
+            )
+            model_no2_col: xr.DataArray = apply_avgk_no2(partial_col, avgk)
+            tropomi_no2_col = ds_tropomi["nitrogendioxide_tropospheric_column"].isel(time=0)
+            ds_out: xr.Dataset = merge_and_diff(no2_model=model_no2_col,
+                                                no2_tropomi=tropomi_no2_col)
+            ds_out.to_netcdf(f"comparison_{ds_trop[15:29]}.nc")
 
 
 # ========================
