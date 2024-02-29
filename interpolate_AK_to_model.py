@@ -41,7 +41,11 @@ def interpolate_AK(ds_tropomi: xr.Dataset, ds_model: xr.Dataset) -> xr.DataArray
     """
     averaging_kernel: xr.DataArray = ds_tropomi["tropo_avg_kernel"].isel(time=0)
     tropo_press: xr.DataArray = ds_tropomi["hlevel_pressure"].isel(time=0)
-    mod_press: np.ndarray = ds_model["pressure"].values
+    mod_press: np.ndarray
+    if "P" in ds_model.keys():
+        mod_press = ds_model["P"].values
+    else:
+        mod_press = ds_model["pressure"].values
     lat: np.ndarray = ds_tropomi["latitude"].values
     lon: np.ndarray = ds_tropomi["longitude"].values
 
@@ -112,18 +116,19 @@ def main() -> None:
         for ds_trop in sorted(
             glob.glob(f"../KTW_S5P_NO2_*_201901{day}_*.nc4")
         ):
-            ds_tropomi: xr.Dataset = xr.open_dataset(
-                ds_trop
-            )#.isel(time=0)
+            ds_tropomi: xr.Dataset = xr.open_dataset(ds_trop)#.isel(time=0)
             avgk: xr.DataArray = interpolate_AK(ds_tropomi, ds_model)
             avgk = avgk.where(avgk < 1e30).isel(time=0)
             partial_col: xr.DataArray = ds_model["NO2_partialcolumn"].isel(
                 time=0
             )
             model_no2_col: xr.DataArray = apply_avgk_no2(partial_col, avgk)
-            tropomi_no2_col = ds_tropomi["nitrogendioxide_tropospheric_column"].isel(time=0)
-            ds_out: xr.Dataset = merge_and_diff(no2_model=model_no2_col,
-                                                no2_tropomi=tropomi_no2_col)
+            tropomi_no2_col = ds_tropomi[
+                "nitrogendioxide_tropospheric_column"
+            ].isel(time=0)
+            ds_out: xr.Dataset = merge_and_diff(
+                no2_model=model_no2_col, no2_tropomi=tropomi_no2_col
+            )
             ds_out.to_netcdf(f"comparison_{ds_trop[15:29]}.nc")
 
 
